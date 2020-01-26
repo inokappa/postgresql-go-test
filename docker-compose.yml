@@ -1,0 +1,43 @@
+version: '3'
+
+services:
+  postgresql_server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        DB_PASSWORD: "posgre"
+    container_name: postgresql-server
+    ports:
+      - "5432:5432"
+    networks:
+      my_net:
+        ipv4_address: 10.0.101.10
+
+  postgresql_client:
+    image: postgres:9
+    container_name: postgresql-client
+    networks:
+      my_net:
+        ipv4_address: 10.0.101.11
+
+  go_test:
+    build:
+      context: tests
+      dockerfile: Dockerfile
+    container_name: go-test
+    environment:
+      - DB_HOST=10.0.101.10
+      - DB_PASSWORD=posgre
+    networks:
+      my_net:
+        ipv4_address: 10.0.101.5
+    command: tail -f /dev/null
+
+networks:
+  my_net:
+    driver: bridge
+    ipam:
+     driver: default
+     config:
+       - subnet: 10.0.101.0/24
