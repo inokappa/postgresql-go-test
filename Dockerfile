@@ -21,6 +21,7 @@ RUN /etc/init.d/postgresql start && \
 # Enable Remote Access
 RUN echo "host all all 0.0.0.0/0 md5" >> /etc/postgresql/9.6/main/pg_hba.conf
 RUN echo "listen_addresses='*'" >> /etc/postgresql/9.6/main/postgresql.conf
+# RUN echo "shared_buffers=1GB" >> /etc/postgresql/9.6/main/postgresql.conf
 
 EXPOSE 5432
 CMD ["/usr/lib/postgresql/9.6/bin/postgres", \

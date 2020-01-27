@@ -1,4 +1,14 @@
-version: '3'
+version: '3.4'
+
+x-common_environment: &common_environment
+  PGAPPNAME: pgbench
+  PGHOST: 10.0.101.10
+  PGUSER: pgadmin
+  PGPASSWORD: posgre
+  PGDATABASE: pgbench
+x-networks: &common_networks
+  networks:
+    my_net:
 
 services:
   postgresql_server:
@@ -17,49 +27,31 @@ services:
   psql:
     image: postgres:9
     container_name: psql
-    networks:
-      my_net:
-        ipv4_address: 10.0.101.11
-    command: tail -f /dev/null
+    environment: *common_environment
+    <<: *common_networks
 
-  pgbench-init:
+  pgbench-prepare:
     image: postgres:9
-    container_name: pgbench-init
-    networks:
-      my_net:
-        ipv4_address: 10.0.101.12
-    environment:
-      PGAPPNAME: pgbench
-      PGHOST: 10.0.101.10
-      PGUSER: pgadmin
-      PGPASSWORD: posgre
-      PGDATABASE: pgbench
-    command: bash -c "dropdb pgbench && createdb --owner=pgadmin pgbench && pgbench -i -s 5"
+    container_name: pgbench-prepare
+    environment: *common_environment
+    command: bash -c "dropdb pgbench ; createdb --owner=pgadmin pgbench && pgbench --initialize --scale=5"
+    <<: *common_networks
+
+  pgbench-teardown:
+    image: postgres:9
+    container_name: pgbench-teardown
+    environment: *common_environment
+    command: bash -c "dropdb pgbench"
+    <<: *common_networks
 
   pgbench:
     image: postgres:9
     container_name: pgbench
-    networks:
-      my_net:
-        ipv4_address: 10.0.101.13
-    environment:
-      PGAPPNAME: pgbench
-      PGHOST: 10.0.101.10
-      PGUSER: pgadmin
-      PGPASSWORD: posgre
-      PGDATABASE: pgbench
-    command: [
-      "pgbench",
-        "-c", "10",
-        "-s", "5",
-        "-R", "10",
-        "-j", "2",
-        "-T", "100",
-        "-b", "tpcb-like",
-        "-P", "1",
-        "--report-latencies",
-        "pgbench"
-    ]
+    environment: *common_environment
+    volumes:
+      - ./benchmark:/work/benchmark
+    command: bash -c "pgbench --client=1 --jobs=2 --time=10 --progress=1 --log --report-latencies pgbench"
+    <<: *common_networks
 
   go_test:
     build:
@@ -67,12 +59,9 @@ services:
       dockerfile: Dockerfile
     container_name: go-test
     environment:
-      - DB_HOST=10.0.101.10
-      - DB_PASSWORD=posgre
-    networks:
-      my_net:
-        ipv4_address: 10.0.101.14
-    command: tail -f /dev/null
+      DB_HOST: 10.0.101.10
+      DB_PASSWORD: posgre
+    <<: *common_networks
 
 networks:
   my_net:
