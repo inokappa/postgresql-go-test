@@ -7,19 +7,59 @@ services:
       dockerfile: Dockerfile
       args:
         DB_PASSWORD: "posgre"
-    container_name: postgresql-server
+    container_name: postgresql
     ports:
       - "5432:5432"
     networks:
       my_net:
         ipv4_address: 10.0.101.10
 
-  postgresql_client:
+  psql:
     image: postgres:9
-    container_name: postgresql-client
+    container_name: psql
     networks:
       my_net:
         ipv4_address: 10.0.101.11
+    command: tail -f /dev/null
+
+  pgbench-init:
+    image: postgres:9
+    container_name: pgbench-init
+    networks:
+      my_net:
+        ipv4_address: 10.0.101.12
+    environment:
+      PGAPPNAME: pgbench
+      PGHOST: 10.0.101.10
+      PGUSER: pgadmin
+      PGPASSWORD: posgre
+      PGDATABASE: pgbench
+    command: bash -c "dropdb pgbench && createdb --owner=pgadmin pgbench && pgbench -i -s 5"
+
+  pgbench:
+    image: postgres:9
+    container_name: pgbench
+    networks:
+      my_net:
+        ipv4_address: 10.0.101.13
+    environment:
+      PGAPPNAME: pgbench
+      PGHOST: 10.0.101.10
+      PGUSER: pgadmin
+      PGPASSWORD: posgre
+      PGDATABASE: pgbench
+    command: [
+      "pgbench",
+        "-c", "10",
+        "-s", "5",
+        "-R", "10",
+        "-j", "2",
+        "-T", "100",
+        "-b", "tpcb-like",
+        "-P", "1",
+        "--report-latencies",
+        "pgbench"
+    ]
 
   go_test:
     build:
@@ -31,7 +71,7 @@ services:
       - DB_PASSWORD=posgre
     networks:
       my_net:
-        ipv4_address: 10.0.101.5
+        ipv4_address: 10.0.101.14
     command: tail -f /dev/null
 
 networks:
