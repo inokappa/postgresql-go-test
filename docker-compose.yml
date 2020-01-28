@@ -53,6 +53,13 @@ services:
     command: bash -c "pgbench --client=1 --jobs=2 --time=10 --progress=1 --log --report-latencies pgbench"
     <<: *common_networks
 
+  rdspara:
+    build:
+      context: rdspara
+      dockerfile: Dockerfile
+    container_name: rdspara
+    <<: *common_networks
+
   go_test:
     build:
       context: tests
