@@ -13,10 +13,11 @@ import (
 
 const (
 	AppVersion = "0.0.1"
-	ParamName  = "kensho-parameter"
 )
 
 var (
+	ParamName = os.Getenv("PARAMETER_NAME")
+
 	argVersion = flag.Bool("version", false, "バージョンを出力.")
 	argRatio   = flag.Float64("rasio", 0, "shared_buffers をメモリに対してどの程度割り当てるか (Default = 50%)")
 )
