@@ -20,18 +20,18 @@ const (
 )
 
 var (
-	ClusterName    = os.Getenv("CLUSTER_NAME")
-	ParamGroupName = os.Getenv("PARAMETER_NAME")
-	svc            = rds.New(session.New())
-
 	argVersion         = flag.Bool("version", false, "バージョンを出力.")
 	argModify          = flag.Bool("modify", false, "パラメータの更新.")
 	argFailover        = flag.Bool("failover", false, "DB インスタンスのフェイルオーバーを実施.")
 	argInstances       = flag.Bool("instances", false, "クラスタの DB インスタンス一覧を取得.")
 	argInstance        = flag.String("instance", "", "DB インスタンス名を指定.")
+	argCluster         = flag.String("cluster", "", "Aurora クラスタ名を指定.")
 	argRestart         = flag.Bool("restart", false, "DB インスタンスの再起動を実施.")
-	argParamNamePrefix = flag.String("param", "", "パラメータの名前を指定")
+	argParamGroup      = flag.String("param-group", "", "DB パラメータグループの名前を指定")
+	argParamNamePrefix = flag.String("param-name-prefix", "", "パラメータの名前を指定")
 	argRatio           = flag.Float64("rasio", 0, "パラメータの値について, メモリに対してどの程度割り当てるかを指定. (Default = 50%)")
+
+	svc = rds.New(session.New())
 )
 
 func main() {
@@ -42,14 +42,34 @@ func main() {
 		os.Exit(0)
 	}
 
-	dbInstances := getClusterInstances()
+	var clusterName string
+	if *argCluster == "" {
+		clusterName = os.Getenv("CLUSTER_NAME")
+	} else if *argCluster != "" {
+		clusterName = *argCluster
+	} else {
+		fmt.Println("`-cluster` パラメータを指定して下さい.")
+		os.Exit(1)
+	}
+
+	var paramGroup string
+	if *argParamGroup == "" {
+		paramGroup = os.Getenv("PARAMETER_NAME")
+	} else if *argParamGroup != "" {
+		paramGroup = *argParamGroup
+	} else {
+		fmt.Println("`-param-group` パラメータを指定して下さい.")
+		os.Exit(1)
+	}
+
+	dbInstances := getClusterInstances(clusterName)
 	if *argInstances {
 		printTable(dbInstances, "instance")
 		os.Exit(0)
 	}
 
 	if !*argModify && *argParamNamePrefix != "" {
-		params := printParams(*argParamNamePrefix)
+		params := printParams(paramGroup, *argParamNamePrefix)
 		printTable(params, "param")
 		os.Exit(0)
 	}
@@ -90,11 +110,11 @@ func main() {
 		if *argRatio != 0 {
 			latest_value = genParameterValue(*argRatio)
 		} else {
-			fmt.Println("`rasio` パラメータを指定して下さい.")
+			fmt.Println("`-rasio` パラメータを指定して下さい.")
 			os.Exit(1)
 		}
 
-		params := printParams(*argParamNamePrefix)
+		params := printParams(paramGroup, *argParamNamePrefix)
 		if len(params) != 1 {
 			fmt.Println("DB パラメータの指定に誤りがあります. パラメータ名を確認して下さい.")
 			os.Exit(1)
@@ -107,13 +127,13 @@ func main() {
 		case "y", "Y":
 			dbInstance := getWriteInstance(dbInstances)
 			fmt.Println("DB パラメータを更新します.")
-			modifyValue(latest_value)
+			modifyValue(paramGroup, latest_value)
 			fmt.Printf("DB パラメータ更新中")
 			for {
-				if getParameterStatus(dbInstance) == "pending-reboot" {
+				if getParameterStatus(dbInstance, paramGroup) == "pending-reboot" {
 					fmt.Printf("\nDB パラメータ更新完了. DB インスタンスの再起動が必要です.\n")
 					break
-				} else if getParameterStatus(dbInstance) == "" {
+				} else if getParameterStatus(dbInstance, paramGroup) == "" {
 					fmt.Println("DB パラメータの更新に失敗しました.")
 					os.Exit(1)
 				}
@@ -179,7 +199,7 @@ func genParameterValue(value float64) string {
 	return parameter
 }
 
-func getParameterStatus(dbInstance string) string {
+func getParameterStatus(dbInstance string, paramGroup string) string {
 	input := &rds.DescribeDBInstancesInput{
 		DBInstanceIdentifier: aws.String(dbInstance),
 	}
@@ -197,7 +217,7 @@ func getParameterStatus(dbInstance string) string {
 	var st string
 	for _, r := range result.DBInstances {
 		for _, p := range r.DBParameterGroups {
-			if *p.DBParameterGroupName == ParamGroupName {
+			if *p.DBParameterGroupName == paramGroup {
 				st = *p.ParameterApplyStatus
 			}
 		}
@@ -226,9 +246,9 @@ func restartDBInstance(dbInstance string, failover bool) string {
 	return st
 }
 
-func getClusterInstances() [][]string {
+func getClusterInstances(clusterName string) [][]string {
 	input := &rds.DescribeDBClustersInput{
-		DBClusterIdentifier: aws.String(ClusterName),
+		DBClusterIdentifier: aws.String(clusterName),
 	}
 
 	result, err := svc.DescribeDBClusters(input)
@@ -289,9 +309,9 @@ func getInstanceStatus(dbInstance string) (string, string) {
 	return st, ps
 }
 
-func modifyValue(param string) {
+func modifyValue(paramGroup string, param string) {
 	input := &rds.ModifyDBParameterGroupInput{
-		DBParameterGroupName: aws.String(ParamGroupName),
+		DBParameterGroupName: aws.String(paramGroup),
 		Parameters: []*rds.Parameter{
 			{
 				ApplyMethod:    aws.String("pending-reboot"),
@@ -312,9 +332,9 @@ func modifyValue(param string) {
 	}
 }
 
-func printParams(paramNamePrefix string) [][]string {
+func printParams(paramGroup string, paramNamePrefix string) [][]string {
 	input := &rds.DescribeDBParametersInput{
-		DBParameterGroupName: aws.String(ParamGroupName),
+		DBParameterGroupName: aws.String(paramGroup),
 	}
 
 	var params [][]string
