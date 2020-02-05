@@ -8,29 +8,15 @@ import (
 	"testing"
 )
 
-const (
-	user   = "pgadmin"
-	dbname = "postgres"
-)
-
 var (
 	host     = os.Getenv("DB_HOST")
+	user     = os.Getenv("DB_USER")
 	password = os.Getenv("DB_PASSWORD")
+	dbname   = os.Getenv("DB_NAME")
 )
 
-func TestPostgrePing(t *testing.T) {
-	// connInfo := fmt.Sprintf("host=%s "+
-	// 	"port=5432 "+
-	// 	"user=%s "+
-	// 	"password=%s "+
-	// 	"dbname=%s "+
-	// 	"sslmode=disable",
-	// 	host, user, password, dbname)
-	// db, err := sql.Open("postgres", connInfo)
-	// if err != nil {
-	// 	t.Errorf("got error: %v", err)
-	// }
-	db, err := dbConnection()
+func TestPostgrePingWithSSL(t *testing.T) {
+	db, err := dbConnection(true)
 	if err != nil {
 		t.Errorf("got error: %v", err)
 	}
@@ -42,14 +28,34 @@ func TestPostgrePing(t *testing.T) {
 	}
 }
 
-func dbConnection() (*sql.DB, error) {
+func TestPostgrePingWithoutSSL(t *testing.T) {
+	db, err := dbConnection(false)
+	if err != nil {
+		t.Errorf("got error: %v", err)
+	}
+	defer db.Close()
+
+	err = db.Ping()
+	if err == nil {
+		t.Errorf("got nil: Should not be able to connect.")
+	} else {
+		t.Log(err)
+	}
+}
+func dbConnection(ssl bool) (*sql.DB, error) {
+	var ssl_mode string
+	if ssl {
+		ssl_mode = "require"
+	} else {
+		ssl_mode = "disable"
+	}
 	connInfo := fmt.Sprintf("host=%s "+
 		"port=5432 "+
 		"user=%s "+
 		"password=%s "+
 		"dbname=%s "+
-		"sslmode=disable",
-		host, user, password, dbname)
+		"sslmode=%s",
+		host, user, password, dbname, ssl_mode)
 	db, err := sql.Open("postgres", connInfo)
 	if err != nil {
 		return nil, err

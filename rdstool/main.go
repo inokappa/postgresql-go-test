@@ -8,6 +8,7 @@ import (
 	_ "github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/rds"
+	"github.com/manifoldco/promptui"
 	"github.com/olekukonko/tablewriter"
 	"os"
 	"strconv"
@@ -22,7 +23,7 @@ const (
 var (
 	argVersion         = flag.Bool("version", false, "バージョンを出力.")
 	argModify          = flag.Bool("modify", false, "パラメータの更新.")
-	argFailover        = flag.Bool("failover", false, "DB インスタンスのフェイルオーバーを実施.")
+	argFailover        = flag.Bool("failover", false, "DB インスタンスのフェイルオーバーを開始.")
 	argInstances       = flag.Bool("instances", false, "クラスタの DB インスタンス一覧を取得.")
 	argInstance        = flag.String("instance", "", "DB インスタンス名を指定.")
 	argCluster         = flag.String("cluster", "", "Aurora クラスタ名を指定.")
@@ -74,13 +75,47 @@ func main() {
 		os.Exit(0)
 	}
 
-	if *argRestart && *argInstance != "" {
-		fmt.Printf("DB インタンス %s を再起動しますか? (y/n): ", *argInstance)
+	if *argFailover {
+		targetDBInstance := selectFailoverTarget(dbInstances)
+		fmt.Printf("DB クラスタ %s をフェイルーバーします. フェイルオーバー先は %v です.\n", clusterName, targetDBInstance)
+		fmt.Printf("処理を継続しますか? (y/n): ")
 		var stdin string
 		fmt.Scan(&stdin)
 		switch stdin {
 		case "y", "Y":
-			fmt.Printf("DB インスタンス %s を再起動します. フェイルオーバーは %v です.\n", *argInstance, *argFailover)
+			dbClusterFailoverStatus := executeClusterFailover(clusterName, targetDBInstance)
+			if dbClusterFailoverStatus == "" {
+				fmt.Printf("DB クラスタのフェイルーバーに失敗しました.")
+				os.Exit(1)
+			}
+			fmt.Printf("DB クラスタのフェイルオーバー実行中")
+			for {
+				st, _ := getInstanceStatus(targetDBInstance)
+				dbInstances := getClusterInstances(clusterName)
+				w := getWriteInstance(dbInstances)
+				if st == "available" && w == targetDBInstance {
+					fmt.Printf("\nDB クラスタフェイルオーバー完了.\n")
+					os.Exit(0)
+				}
+				fmt.Printf(".")
+				time.Sleep(time.Second * 5)
+			}
+		case "n", "N":
+			fmt.Println("処理を停止します.")
+			os.Exit(0)
+		default:
+			fmt.Println("処理を停止します.")
+			os.Exit(0)
+		}
+	}
+
+	if *argRestart && *argInstance != "" {
+		fmt.Printf("DB インタンス %s を再起動します.\n", *argInstance)
+		fmt.Printf("処理を継続しますか? (y/n): ")
+		var stdin string
+		fmt.Scan(&stdin)
+		switch stdin {
+		case "y", "Y":
 			dbInstanceStatus := restartDBInstance(*argInstance, *argFailover)
 			if dbInstanceStatus == "" {
 				fmt.Printf("DB インスタンスの再起動に失敗しました.")
@@ -119,8 +154,8 @@ func main() {
 			fmt.Println("DB パラメータの指定に誤りがあります. パラメータ名を確認して下さい.")
 			os.Exit(1)
 		}
-		fmt.Printf("DB パラメータ %s の新しい値は: %s\n", *argParamNamePrefix, latest_value)
-		fmt.Print("DB パラメータを更新しますか? (y/n): ")
+		fmt.Printf("DB パラメータを更新します. DB パラメータ %s の新しい値は: %s\n", *argParamNamePrefix, latest_value)
+		fmt.Printf("処理を継続しますか? (y/n): ")
 		var stdin string
 		fmt.Scan(&stdin)
 		switch stdin {
@@ -140,20 +175,20 @@ func main() {
 				fmt.Printf(".")
 				time.Sleep(time.Second * 5)
 			}
-			fmt.Printf("DB インタンス %s を再起動しますか? (y/n): ", dbInstance)
+			fmt.Printf("DB インタンス %s を再起動します.\n", *argInstance)
+			fmt.Printf("処理を継続しますか? (y/n): ")
 			var stdin string
 			fmt.Scan(&stdin)
 			switch stdin {
 			case "y", "Y":
-				fmt.Printf("DB インスタンス %s を再起動します. フェイルオーバーは %v です.\n", dbInstance, *argFailover)
-				dbInstanceStatus := restartDBInstance(dbInstance, *argFailover)
+				dbInstanceStatus := restartDBInstance(*argInstance, *argFailover)
 				if dbInstanceStatus == "" {
 					fmt.Printf("DB インスタンスの再起動に失敗しました.")
 					os.Exit(1)
 				}
 				fmt.Printf("DB インスタンスを再起動中")
 				for {
-					st, _ := getInstanceStatus(dbInstance)
+					st, _ := getInstanceStatus(*argInstance)
 					if st == "available" {
 						fmt.Printf("\nDB インスタンス再起動完了.\n")
 						os.Exit(0)
@@ -183,12 +218,19 @@ func printTable(data [][]string, t string) {
 	table := tablewriter.NewWriter(os.Stdout)
 	if t == "instance" {
 		table.SetHeader([]string{"InstanceIdentifier", "InstanceStatus", "Writer", "ParameterApplyStatus", "ClusterParameterGroupStatus", "PromotionTier"})
+		for _, value := range data {
+			if value[2] == "true" {
+				for i, e := range value {
+					value[i] = fmt.Sprintf("\x1b[31m%s\x1b[0m", e)
+				}
+			}
+			table.Append(value)
+		}
 	} else {
 		table.SetHeader([]string{"ParameterName", "ParameterValue"})
+		table.AppendBulk(data)
 	}
-	for _, value := range data {
-		table.Append(value)
-	}
+
 	table.Render()
 }
 
@@ -226,9 +268,11 @@ func getParameterStatus(dbInstance string, paramGroup string) string {
 	return st
 }
 
+// Restart DB Instance
 func restartDBInstance(dbInstance string, failover bool) string {
 	input := &rds.RebootDBInstanceInput{
 		DBInstanceIdentifier: aws.String(dbInstance),
+		// Aurora クラスタではエラーになるので, 何らかの回避方法で RDS と Aurora 両方に対応出来るようにする... いつか
 		// ForceFailover:    aws.Bool(failover),
 	}
 
@@ -243,6 +287,27 @@ func restartDBInstance(dbInstance string, failover bool) string {
 	}
 
 	st := *result.DBInstance.DBInstanceStatus
+	return st
+}
+
+// Failover DB Cluster
+func executeClusterFailover(clusterName string, targetDBInstance string) string {
+	input := &rds.FailoverDBClusterInput{
+		DBClusterIdentifier:        aws.String(clusterName),
+		TargetDBInstanceIdentifier: aws.String(targetDBInstance),
+	}
+
+	result, err := svc.FailoverDBCluster(input)
+	if err != nil {
+		if aerr, ok := err.(awserr.Error); ok {
+			fmt.Println(aerr.Error())
+		} else {
+			fmt.Println(err.Error())
+		}
+		return ""
+	}
+
+	st := *result.DBCluster.Status
 	return st
 }
 
@@ -287,6 +352,28 @@ func getWriteInstance(dbInstances [][]string) string {
 		}
 	}
 	return writer
+}
+
+func selectFailoverTarget(dbInstances [][]string) string {
+	var targets []string
+	for _, i := range dbInstances {
+		if i[2] != "true" {
+			targets = append(targets, i[0])
+		}
+	}
+	prompt := promptui.Select{
+		Label: "フェイルオーバー先の DB インスタンスを選択して下さい.",
+		Items: targets,
+	}
+
+	_, result, err := prompt.Run()
+
+	if err != nil {
+		fmt.Printf("Prompt failed %v\n", err)
+		return ""
+	}
+
+	return result
 }
 
 func getInstanceStatus(dbInstance string) (string, string) {

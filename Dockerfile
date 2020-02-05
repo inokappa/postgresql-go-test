@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install gnupg gnupg2 wget sudo net-tools -y
 RUN echo 'deb http://apt.postgresql.org/pub/repos/apt/ bionic-pgdg main' >> /etc/apt/sources.list.d/pgdg.list && \
     wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add -
 RUN apt-get update && \
-    apt-get install postgresql-9.6 -y
+    apt-get install postgresql-9.6 postgresql-9.6-pgrouting postgresql-9.6-postgis-3 -y
 
 USER postgres
 

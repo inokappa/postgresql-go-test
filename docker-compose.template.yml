@@ -53,12 +53,16 @@ services:
     command: bash -c "pgbench --client=1 --jobs=2 --time=10 --progress=1 --log --report-latencies pgbench"
     <<: *common_networks
 
-  rdspara:
+  rdstool:
     build:
-      context: rdspara
+      context: rdstool
       dockerfile: Dockerfile
-    container_name: rdspara
+    container_name: rdstool
+    environment:
+      PARAMETER_NAME: 
+      AWS_REGION: ap-northeast-1
     <<: *common_networks
+    entrypoint: "/rdstool"
 
   go_test:
     build:
