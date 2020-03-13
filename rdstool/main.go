@@ -8,6 +8,7 @@ import (
 	_ "github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/rds"
+	"github.com/kyokomi/emoji"
 	"github.com/manifoldco/promptui"
 	"github.com/olekukonko/tablewriter"
 	"os"
@@ -17,22 +18,25 @@ import (
 )
 
 const (
-	AppVersion = "0.0.1"
+	AppVersion = "0.0.3"
 )
 
 var (
-	argVersion         = flag.Bool("version", false, "バージョンを出力.")
-	argModify          = flag.Bool("modify", false, "パラメータの更新.")
-	argFailover        = flag.Bool("failover", false, "DB インスタンスのフェイルオーバーを開始.")
-	argInstances       = flag.Bool("instances", false, "クラスタの DB インスタンス一覧を取得.")
-	argInstance        = flag.String("instance", "", "DB インスタンス名を指定.")
-	argCluster         = flag.String("cluster", "", "Aurora クラスタ名を指定.")
-	argRestart         = flag.Bool("restart", false, "DB インスタンスの再起動を実施.")
-	argParamGroup      = flag.String("param-group", "", "DB パラメータグループの名前を指定")
-	argParamNamePrefix = flag.String("param-name-prefix", "", "パラメータの名前を指定")
-	argRatio           = flag.Float64("rasio", 0, "パラメータの値について, メモリに対してどの程度割り当てるかを指定. (Default = 50%)")
+	argVersion    = flag.Bool("version", false, "バージョンを出力.")
+	argModify     = flag.Bool("modify", false, "パラメータの更新.")
+	argFailover   = flag.Bool("failover", false, "DB インスタンスのフェイルオーバーを開始.")
+	argInstances  = flag.Bool("instances", false, "クラスタの DB インスタンス一覧を取得.")
+	argInstance   = flag.String("instance", "", "DB インスタンス名を指定.")
+	argCluster    = flag.String("cluster", "", "Aurora クラスタ名を指定.")
+	argRestart    = flag.Bool("restart", false, "DB インスタンスの再起動を実施.")
+	argParamGroup = flag.String("param-group", "", "DB パラメータグループの名前を指定")
+	argParamName  = flag.String("param-name", "", "パラメータの名前を指定")
+	argRatio      = flag.Float64("ratio", 0, "指定可能なパラメータ値のメモリに対する割合を指定.")
 
-	svc = rds.New(session.New())
+	svc   = rds.New(session.New())
+	mega  = emoji.Sprint(":mega:")
+	sushi = emoji.Sprint(":sushi:")
+	warn  = emoji.Sprint(":beer:")
 )
 
 func main() {
@@ -45,39 +49,57 @@ func main() {
 
 	var clusterName string
 	if *argCluster == "" {
-		clusterName = os.Getenv("CLUSTER_NAME")
+		if os.Getenv("CLUSTER_NAME") != "" {
+			clusterName = os.Getenv("CLUSTER_NAME")
+		} else {
+			fmt.Printf("%s`-cluster` パラメータ又は環境変数 `CLUSTER_NAME` を指定して下さい.\n", warn)
+			os.Exit(1)
+		}
 	} else if *argCluster != "" {
 		clusterName = *argCluster
 	} else {
-		fmt.Println("`-cluster` パラメータを指定して下さい.")
+		fmt.Printf("%s`-cluster` パラメータ又は環境変数 `CLUSTER_NAME` を指定して下さい.\n", warn)
 		os.Exit(1)
 	}
 
 	var paramGroup string
 	if *argParamGroup == "" {
-		paramGroup = os.Getenv("PARAMETER_NAME")
+		if os.Getenv("PARAMETER_NAME") != "" {
+			paramGroup = os.Getenv("PARAMETER_NAME")
+		} else {
+			fmt.Printf("%s`-param-group` パラメータ又は環境変数 `PARAMETER_NAME` を指定して下さい.\n", warn)
+			os.Exit(1)
+		}
 	} else if *argParamGroup != "" {
 		paramGroup = *argParamGroup
 	} else {
-		fmt.Println("`-param-group` パラメータを指定して下さい.")
+		fmt.Printf("%s`-param-group` パラメータ又は環境変数 `CLUSTER_NAME` を指定して下さい.\n", warn)
 		os.Exit(1)
 	}
 
+	fmt.Printf("%scluster: \x1b[42m%s\x1b[0m\tparameter group: \x1b[42m%s\x1b[0m\n", sushi, clusterName, paramGroup)
+
 	dbInstances := getClusterInstances(clusterName)
+
+	if dbInstances == nil {
+		fmt.Printf("%sDB インスタンスが存在していません.\n", warn)
+		os.Exit(1)
+	}
+
 	if *argInstances {
 		printTable(dbInstances, "instance")
 		os.Exit(0)
 	}
 
-	if !*argModify && *argParamNamePrefix != "" {
-		params := printParams(paramGroup, *argParamNamePrefix)
+	if !*argModify && *argParamName != "" {
+		params := printParams(paramGroup, *argParamName)
 		printTable(params, "param")
 		os.Exit(0)
 	}
 
 	if *argFailover {
 		targetDBInstance := selectFailoverTarget(dbInstances)
-		fmt.Printf("DB クラスタ %s をフェイルーバーします. フェイルオーバー先は %v です.\n", clusterName, targetDBInstance)
+		fmt.Printf("%s DB クラスタ \x1b[41m%s\x1b[0m をフェイルーバーします. フェイルオーバー先は \x1b[41m%s\x1b[0m です.\n", mega, clusterName, targetDBInstance)
 		fmt.Printf("処理を継続しますか? (y/n): ")
 		var stdin string
 		fmt.Scan(&stdin)
@@ -109,21 +131,27 @@ func main() {
 		}
 	}
 
-	if *argRestart && *argInstance != "" {
-		fmt.Printf("DB インタンス %s を再起動します.\n", *argInstance)
+	if *argRestart {
+		var restartDBInstanceName string
+		if *argInstance == "" {
+			restartDBInstanceName = selectRestartTarget(dbInstances)
+		} else {
+			restartDBInstanceName = *argInstance
+		}
+		fmt.Printf("%s DB インタンス \x1b[41m%s\x1b[0m を再起動します.\n", mega, restartDBInstanceName)
 		fmt.Printf("処理を継続しますか? (y/n): ")
 		var stdin string
 		fmt.Scan(&stdin)
 		switch stdin {
 		case "y", "Y":
-			dbInstanceStatus := restartDBInstance(*argInstance, *argFailover)
+			dbInstanceStatus := restartDBInstance(restartDBInstanceName, *argFailover)
 			if dbInstanceStatus == "" {
 				fmt.Printf("DB インスタンスの再起動に失敗しました.")
 				os.Exit(1)
 			}
 			fmt.Printf("DB インスタンスを再起動中")
 			for {
-				st, _ := getInstanceStatus(*argInstance)
+				st, _ := getInstanceStatus(restartDBInstanceName)
 				if st == "available" {
 					fmt.Printf("\nDB インスタンス再起動完了.\n")
 					os.Exit(0)
@@ -140,7 +168,7 @@ func main() {
 		}
 	}
 
-	if *argModify && *argParamNamePrefix != "" {
+	if *argModify && *argParamName != "" {
 		var latest_value string
 		if *argRatio != 0 {
 			latest_value = genParameterValue(*argRatio)
@@ -149,12 +177,12 @@ func main() {
 			os.Exit(1)
 		}
 
-		params := printParams(paramGroup, *argParamNamePrefix)
+		params := printParams(paramGroup, *argParamName)
 		if len(params) != 1 {
 			fmt.Println("DB パラメータの指定に誤りがあります. パラメータ名を確認して下さい.")
 			os.Exit(1)
 		}
-		fmt.Printf("DB パラメータを更新します. DB パラメータ %s の新しい値は: %s\n", *argParamNamePrefix, latest_value)
+		fmt.Printf("%s DB パラメータ \x1b[41m%s\x1b[0m の値を \x1b[41m%s\x1b[0m に変更します.\n", mega, *argParamName, latest_value)
 		fmt.Printf("処理を継続しますか? (y/n): ")
 		var stdin string
 		fmt.Scan(&stdin)
@@ -162,11 +190,11 @@ func main() {
 		case "y", "Y":
 			dbInstance := getWriteInstance(dbInstances)
 			fmt.Println("DB パラメータを更新します.")
-			modifyValue(paramGroup, latest_value)
+			modifyValue(paramGroup, *argParamName, latest_value)
 			fmt.Printf("DB パラメータ更新中")
 			for {
 				if getParameterStatus(dbInstance, paramGroup) == "pending-reboot" {
-					fmt.Printf("\nDB パラメータ更新完了. DB インスタンスの再起動が必要です.\n")
+					fmt.Printf("\n%s DB パラメータ更新完了. DB インスタンスの再起動が必要です. `-restart -instance=xxxxxxxx` オプションを指定して DB インスタンスを再起動して下さい.\n", mega)
 					break
 				} else if getParameterStatus(dbInstance, paramGroup) == "" {
 					fmt.Println("DB パラメータの更新に失敗しました.")
@@ -175,34 +203,7 @@ func main() {
 				fmt.Printf(".")
 				time.Sleep(time.Second * 5)
 			}
-			fmt.Printf("DB インタンス %s を再起動します.\n", *argInstance)
-			fmt.Printf("処理を継続しますか? (y/n): ")
-			var stdin string
-			fmt.Scan(&stdin)
-			switch stdin {
-			case "y", "Y":
-				dbInstanceStatus := restartDBInstance(*argInstance, *argFailover)
-				if dbInstanceStatus == "" {
-					fmt.Printf("DB インスタンスの再起動に失敗しました.")
-					os.Exit(1)
-				}
-				fmt.Printf("DB インスタンスを再起動中")
-				for {
-					st, _ := getInstanceStatus(*argInstance)
-					if st == "available" {
-						fmt.Printf("\nDB インスタンス再起動完了.\n")
-						os.Exit(0)
-					}
-					fmt.Printf(".")
-					time.Sleep(time.Second * 5)
-				}
-			case "n", "N":
-				fmt.Println("処理を停止します.")
-				os.Exit(0)
-			default:
-				fmt.Println("処理を停止します.")
-				os.Exit(0)
-			}
+			os.Exit(0)
 		case "n", "N":
 			fmt.Println("処理を停止します.")
 			os.Exit(0)
@@ -217,17 +218,18 @@ func main() {
 func printTable(data [][]string, t string) {
 	table := tablewriter.NewWriter(os.Stdout)
 	if t == "instance" {
-		table.SetHeader([]string{"InstanceIdentifier", "InstanceStatus", "Writer", "ParameterApplyStatus", "ClusterParameterGroupStatus", "PromotionTier"})
+		// table.SetHeader([]string{"InstanceIdentifier", "InstanceStatus", "Writer", "ParameterApplyStatus", "ClusterParameterGroupStatus", "PromotionTier"})
+		table.SetHeader([]string{"InstanceIdentifier", "InstanceStatus", "Writer", "ParameterApplyStatus", "ClusterParameterGroupStatus"})
 		for _, value := range data {
 			if value[2] == "true" {
 				for i, e := range value {
-					value[i] = fmt.Sprintf("\x1b[31m%s\x1b[0m", e)
+					value[i] = fmt.Sprintf("\x1b[41m%s\x1b[0m", e)
 				}
 			}
 			table.Append(value)
 		}
-	} else {
-		table.SetHeader([]string{"ParameterName", "ParameterValue"})
+	} else if t == "param" {
+		table.SetHeader([]string{"ParameterName", "ParameterValue", "DataType", "AllowedValues"})
 		table.AppendBulk(data)
 	}
 
@@ -329,7 +331,7 @@ func getClusterInstances(clusterName string) [][]string {
 	// fmt.Println(result.DBClusters[0].DBClusterMembers)
 	var instances [][]string
 	for _, i := range result.DBClusters[0].DBClusterMembers {
-		tier := strconv.FormatInt(*i.PromotionTier, 10)
+		// tier := strconv.FormatInt(*i.PromotionTier, 10)
 		st, ps := getInstanceStatus(*i.DBInstanceIdentifier)
 		instance := []string{
 			*i.DBInstanceIdentifier,
@@ -337,7 +339,7 @@ func getClusterInstances(clusterName string) [][]string {
 			strconv.FormatBool(*i.IsClusterWriter),
 			ps,
 			*i.DBClusterParameterGroupStatus,
-			tier,
+			// tier,
 		}
 		instances = append(instances, instance)
 	}
@@ -376,6 +378,26 @@ func selectFailoverTarget(dbInstances [][]string) string {
 	return result
 }
 
+func selectRestartTarget(dbInstances [][]string) string {
+	var targets []string
+	for _, i := range dbInstances {
+		targets = append(targets, i[0])
+	}
+	prompt := promptui.Select{
+		Label: "再起動する DB インスタンスを選択して下さい.",
+		Items: targets,
+	}
+
+	_, result, err := prompt.Run()
+
+	if err != nil {
+		fmt.Printf("Prompt failed %v\n", err)
+		return ""
+	}
+
+	return result
+}
+
 func getInstanceStatus(dbInstance string) (string, string) {
 	input := &rds.DescribeDBInstancesInput{
 		DBInstanceIdentifier: aws.String(dbInstance),
@@ -396,14 +418,14 @@ func getInstanceStatus(dbInstance string) (string, string) {
 	return st, ps
 }
 
-func modifyValue(paramGroup string, param string) {
+func modifyValue(paramGroup string, paramName string, paramValue string) {
 	input := &rds.ModifyDBParameterGroupInput{
 		DBParameterGroupName: aws.String(paramGroup),
 		Parameters: []*rds.Parameter{
 			{
 				ApplyMethod:    aws.String("pending-reboot"),
-				ParameterName:  aws.String("shared_buffers"),
-				ParameterValue: aws.String(param),
+				ParameterName:  aws.String(paramName),
+				ParameterValue: aws.String(paramValue),
 			},
 		},
 	}
@@ -444,12 +466,18 @@ func printParams(paramGroup string, paramNamePrefix string) [][]string {
 					} else {
 						pv = *p.ParameterValue
 					}
-					param := []string{*p.ParameterName, pv}
+					var avs string
+					if p.AllowedValues == nil {
+						avs = "N/A"
+					} else {
+						avs = *p.AllowedValues
+					}
+					param := []string{*p.ParameterName, pv, *p.DataType, avs}
 					params = append(params, param)
 				}
 			} else {
 				// Bug
-				param := []string{*p.ParameterName, *p.ParameterValue}
+				param := []string{*p.ParameterName, *p.ParameterValue, *p.DataType, *p.AllowedValues}
 				params = append(params, param)
 			}
 		}
